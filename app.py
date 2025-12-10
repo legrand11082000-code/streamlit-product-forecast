@@ -18,24 +18,40 @@ from statsmodels.tsa.statespace.sarimax import SARIMAX
 
 warnings.filterwarnings("ignore")
 
-st.set_page_config("Top-3 Forecast Models", layout="wide")
+# ✅ REQUIRED for Render (safe page config)
+st.set_page_config(
+    page_title="Top-3 Forecast Models",
+    layout="wide"
+)
+
 st.title("📦 Product Forecast — Top 3 Best Models")
+
+# --------------------------
+# ✅ CACHE FILE LOADING (huge performance win)
+# --------------------------
+@st.cache_data(show_spinner=False)
+def load_data(file):
+    if file.name.endswith("xlsx"):
+        return pd.read_excel(file)
+    else:
+        return pd.read_csv(file)
 
 # --------------------------
 # Upload file
 # --------------------------
 file = st.file_uploader("Upload Excel / CSV", type=["xlsx", "csv"])
 if not file:
+    st.info("⬆️ Upload a file to start forecasting")
     st.stop()
 
-df = pd.read_excel(file) if file.name.endswith("xlsx") else pd.read_csv(file)
+df = load_data(file)
 
 # --------------------------
 # Validate & Clean
 # --------------------------
 required = {"Date", "ITEM CODE", "Sum of TOTQTY"}
 if not required.issubset(df.columns):
-    st.error(f"Missing columns: {required}")
+    st.error(f"❌ Missing columns: {required}")
     st.stop()
 
 df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
@@ -54,6 +70,7 @@ forecast_months = st.sidebar.slider("Forecast months", 1, 3, 3)
 backtest_months = st.sidebar.slider("Backtest months", 3, 6, 3)
 
 if not products:
+    st.warning("⚠️ Select at least one product")
     st.stop()
 
 # --------------------------
@@ -77,10 +94,17 @@ def non_negative(preds, last_value):
 # --------------------------
 final_rows = []
 
+# ✅ Progress bar (important for Render long runs)
+progress = st.progress(0)
+total_products = len(products)
+
 # ==========================
 # Forecast Loop
 # ==========================
-for product in products:
+for idx, product in enumerate(products, start=1):
+
+    progress.progress(idx / total_products)
+
     df_p = df[df["ITEM CODE"].astype(str) == str(product)]
     ts = (
         df_p.groupby("Date")["Sum of TOTQTY"]
@@ -92,7 +116,7 @@ for product in products:
     if len(ts) < 6:
         continue
 
-    # ✅ Rule: last 6 months ≤ 0 → forecast = 0
+    # ✅ Zero demand rule
     if (ts[-6:] <= 0).all():
         for m in range(1, forecast_months + 1):
             final_rows.append({
@@ -122,28 +146,25 @@ for product in products:
     # ---------------- SES
     try:
         m = SimpleExpSmoothing(train).fit()
-        preds = m.forecast(len(test))
-        models["SES"] = safe_mape(test, preds)
+        models["SES"] = safe_mape(test, m.forecast(len(test)))
     except:
         pass
 
     # ---------------- Holt
     try:
         m = ExponentialSmoothing(train, trend="add").fit()
-        preds = m.forecast(len(test))
-        models["Holt"] = safe_mape(test, preds)
+        models["Holt"] = safe_mape(test, m.forecast(len(test)))
     except:
         pass
 
     # ---------------- ARIMA
     try:
         m = ARIMA(train, order=(1,1,1)).fit()
-        preds = m.forecast(len(test))
-        models["ARIMA"] = safe_mape(test, preds)
+        models["ARIMA"] = safe_mape(test, m.forecast(len(test)))
     except:
         pass
 
-    # ---------------- SARIMA (Seasonality ✅)
+    # ---------------- SARIMA
     if len(train) >= 24:
         try:
             m = SARIMAX(
@@ -153,35 +174,25 @@ for product in products:
                 enforce_stationarity=False,
                 enforce_invertibility=False
             ).fit(disp=False)
-            preds = m.forecast(len(test))
-            models["SARIMA"] = safe_mape(test, preds)
+            models["SARIMA"] = safe_mape(test, m.forecast(len(test)))
         except:
             pass
 
     if not models:
         continue
 
-    # ---------------- Top-3 Models
     best_models = sorted(models.items(), key=lambda x: x[1])[:3]
 
     for model_name, err in best_models:
-
         try:
             if model_name == "Linear":
-                lr = LinearRegression().fit(X, y)
-                future = lr.predict(
-                    np.arange(len(ts), len(ts)+forecast_months).reshape(-1,1)
-                )
-
+                future = lr.predict(np.arange(len(ts), len(ts)+forecast_months).reshape(-1,1))
             elif model_name == "SES":
                 future = SimpleExpSmoothing(ts).fit().forecast(forecast_months)
-
             elif model_name == "Holt":
                 future = ExponentialSmoothing(ts, trend="add").fit().forecast(forecast_months)
-
             elif model_name == "ARIMA":
                 future = ARIMA(ts, order=(1,1,1)).fit().forecast(forecast_months)
-
             elif model_name == "SARIMA":
                 future = SARIMAX(
                     ts,
@@ -201,24 +212,24 @@ for product in products:
                     "Forecast Value": round(float(v),2),
                     "MAPE %": round(err,2)
                 })
-
         except:
             continue
 
 # ==========================
-# Final Output Table
+# Final Output
 # ==========================
 final_df = pd.DataFrame(final_rows)
 
 st.subheader("✅ Top-3 Best Model Forecasts")
-st.dataframe(final_df, use_container_width=True)
+st.dataframe(final_df, use_container_width=True, height=450)
 
 st.download_button(
-    "Download Forecast CSV",
+    "⬇️ Download Forecast CSV",
     final_df.to_csv(index=False),
     "top3_forecast.csv",
     mime="text/csv"
 )
+
 
 
 
