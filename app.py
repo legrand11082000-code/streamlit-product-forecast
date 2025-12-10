@@ -8,9 +8,7 @@ st.title("📦 Product-wise Quantity & Value Forecast")
 # -----------------------------
 # Upload Excel
 # -----------------------------
-uploaded_file = st.file_uploader(
-    "Upload Excel File", type=["xlsx"]
-)
+uploaded_file = st.file_uploader("Upload Excel File", type=["xlsx"])
 
 if uploaded_file:
     df = pd.read_excel(uploaded_file)
@@ -51,19 +49,26 @@ if uploaded_file:
         1, 12, 3
     )
 
+    # Filter product data
     df_p = df[df["ITEM CODE"].astype(str) == product]
 
     if len(df_p) < 12:
-        st.warning("Minimum 12 months required")
-        st.stop()
+        st.warning(f"Only {len(df_p)} months of data available. Forecast may be less accurate.")
 
-    qty_ts = df_p.set_index("Date")["Sum of TOTQTY"]
-    val_ts = df_p.set_index("Date")["Sum of TOTNET"]
+    # -----------------------------
+    # Time Series
+    # -----------------------------
+    qty_ts = df_p.set_index("Date")["Sum of TOTQTY"].asfreq('MS')  # Ensure monthly frequency
+    val_ts = df_p.set_index("Date")["Sum of TOTNET"].asfreq('MS')
 
     # -----------------------------
     # Forecast Button
     # -----------------------------
     if st.button("Run Prediction"):
+
+        if len(qty_ts) < 2:
+            st.error("Not enough data to forecast.")
+            st.stop()
 
         # ---- Quantity Model
         qty_model = ExponentialSmoothing(
@@ -72,7 +77,6 @@ if uploaded_file:
             seasonal="add",
             seasonal_periods=12
         ).fit()
-
         qty_fc = qty_model.forecast(months)
 
         # ---- Value Model
@@ -82,34 +86,36 @@ if uploaded_file:
             seasonal="add",
             seasonal_periods=12
         ).fit()
-
         val_fc = val_model.forecast(months)
 
+        # -----------------------------
+        # Result DataFrame
+        # -----------------------------
         result = pd.DataFrame({
             "Month": qty_fc.index,
             "Forecast_QTY": qty_fc.values,
             "Forecast_NET_VALUE": val_fc.values
         })
 
-        # -----------------------------
-        # Output
-        # -----------------------------
         st.subheader("📈 Forecast Result")
         st.dataframe(result)
 
-        st.line_chart(
-            pd.concat(
-                [
-                    qty_ts.rename("Actual QTY"),
-                    qty_fc.rename("Forecast QTY")
-                ],
-                axis=0
-            )
-        )
+        # -----------------------------
+        # Line Chart: Actual vs Forecast
+        # -----------------------------
+        chart_df = pd.concat([
+            qty_ts.rename("Actual QTY"),
+            qty_fc.rename("Forecast QTY")
+        ])
+        st.line_chart(chart_df)
 
+        # -----------------------------
+        # Download Forecast
+        # -----------------------------
         st.download_button(
             "Download Forecast",
             result.to_csv(index=False),
             "product_forecast.csv"
         )
+
 
