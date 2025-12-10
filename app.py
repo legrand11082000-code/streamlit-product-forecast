@@ -17,9 +17,11 @@ if uploaded_file:
     # Validate Columns
     # -----------------------------
 required_cols = {"Date", "ITEM CODE", "Sum of TOTQTY", "Sum of TOTNET"}
-    if not required_cols.issubset(df.columns):
-        st.error(f"Excel must contain columns: {required_cols}")
-        st.stop()
+if not required_cols.issubset(df.columns):
+    
+    st.error(f"Excel must contain columns: {required_cols}")
+    st.stop()
+        
 
     # -----------------------------
     # Clean Data
