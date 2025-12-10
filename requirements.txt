@@ -1,9 +1,9 @@
-streamlit
+streamlit==1.52.1
 pandas
 numpy
 scikit-learn
-statsmodels
+xgboost
 prophet
-xgboost      # optional; if unavailable the app skips XGBoost
-tensorflow   # optional; only needed if you enable GRU/TCN
-altair
+tensorflow
+statsmodels
+openpyxl
