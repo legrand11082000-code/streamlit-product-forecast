@@ -16,7 +16,7 @@ if uploaded_file:
     # -----------------------------
     # Validate Columns
     # -----------------------------
-    required_cols = {"Date", "ITEM CODE", "Sum of TOTQTY", "Sum of TOTNET"}
+required_cols = {"Date", "ITEM CODE", "Sum of TOTQTY", "Sum of TOTNET"}
     if not required_cols.issubset(df.columns):
         st.error(f"Excel must contain columns: {required_cols}")
         st.stop()
@@ -85,10 +85,22 @@ if uploaded_file:
         st.dataframe(result)
 
         # -----------------------------
-        # Chart: Actual vs Forecast QTY
+        # Altair Chart: Actual vs Forecast QTY
         # -----------------------------
-        chart_df = pd.concat([qty_ts.rename("Actual QTY"), qty_fc.rename("Forecast QTY")])
-        st.line_chart(chart_df)
+        chart_df = pd.DataFrame({
+            "Date": list(qty_ts.index) + list(qty_fc.index),
+            "Quantity": list(qty_ts.values) + list(qty_fc.values),
+            "Type": ["Actual"]*len(qty_ts) + ["Forecast"]*len(qty_fc)
+        })
+
+        chart = alt.Chart(chart_df).mark_line(point=True).encode(
+            x="Date:T",
+            y="Quantity:Q",
+            color="Type:N",
+            tooltip=["Date:T", "Quantity:Q", "Type:N"]
+        ).interactive()
+
+        st.altair_chart(chart, use_container_width=True)
 
         # -----------------------------
         # Download Forecast
@@ -98,5 +110,4 @@ if uploaded_file:
             result.to_csv(index=False),
             "product_forecast.csv"
         )
-
 
