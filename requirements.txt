@@ -1,6 +1,9 @@
-prophet
-statsmodels
-scikit-learn
+streamlit
 pandas
 numpy
-streamlit
+scikit-learn
+statsmodels
+prophet
+xgboost      # optional; if unavailable the app skips XGBoost
+tensorflow   # optional; only needed if you enable GRU/TCN
+altair
