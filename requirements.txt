@@ -1,5 +1,6 @@
-streamlit
-pandas
-openpyxl
+prophet
 statsmodels
 scikit-learn
+pandas
+numpy
+streamlit
