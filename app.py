@@ -69,7 +69,7 @@ if not products:
     st.sidebar.info("Select at least one product to forecast")
     st.stop()
 
-forecast_months = st.sidebar.slider("Forecast horizon (months)", 1, 12, 3)
+forecast_months = st.sidebar.slider("Forecast horizon (months)", 1, 12)
 backtest_months = st.sidebar.slider("Backtest months (for model selection)", 3, min(12, max(3, forecast_months)), 3)
 run_deep = st.sidebar.checkbox("Enable GRU/TCN (requires tensorflow & more data)", False)
 n_jobs = st.sidebar.number_input("n_jobs for RF/XGB (0 = all cores)", 1, 8, 1)
