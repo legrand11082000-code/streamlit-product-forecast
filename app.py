@@ -9,7 +9,7 @@ st.title("📦 Product-wise Quantity & Value Forecast")
 # Upload Excel
 # -----------------------------
 uploaded_file = st.file_uploader(
-    "/content/Streamlit.xlsx", type=["xlsx"]
+    "Upload Excel File", type=["xlsx"]
 )
 
 if uploaded_file:
@@ -36,11 +36,14 @@ if uploaded_file:
     st.dataframe(df.head())
 
     # -----------------------------
-    # Product Selection
+    # Product Selection (Robust)
     # -----------------------------
+    # Convert all ITEM CODEs to string and drop NaNs
+    item_codes = sorted([str(x) for x in df["ITEM CODE"].dropna().unique()])
+
     product = st.selectbox(
         "Select Product Code",
-        sorted(df["ITEM CODE"].unique())
+        item_codes
     )
 
     months = st.slider(
@@ -48,7 +51,7 @@ if uploaded_file:
         1, 12, 3
     )
 
-    df_p = df[df["ITEM CODE"] == product]
+    df_p = df[df["ITEM CODE"].astype(str) == product]
 
     if len(df_p) < 12:
         st.warning("Minimum 12 months required")
@@ -109,3 +112,4 @@ if uploaded_file:
             result.to_csv(index=False),
             "product_forecast.csv"
         )
+
