@@ -34,31 +34,21 @@ if uploaded_file:
     st.dataframe(df.head())
 
     # -----------------------------
-    # Product Selection (Robust)
+    # Product Selection
     # -----------------------------
-    # Convert all ITEM CODEs to string and drop NaNs
     item_codes = sorted([str(x) for x in df["ITEM CODE"].dropna().unique()])
+    product = st.selectbox("Select Product Code", item_codes)
 
-    product = st.selectbox(
-        "Select Product Code",
-        item_codes
-    )
-
-    months = st.slider(
-        "Forecast Months",
-        1, 12, 3
-    )
+    months = st.slider("Forecast Months", 1, 12, 3)
 
     # Filter product data
     df_p = df[df["ITEM CODE"].astype(str) == product]
 
-    if len(df_p) < 12:
-        st.warning(f"Only {len(df_p)} months of data available. Forecast may be less accurate.")
+    if len(df_p) < 2:
+        st.warning("Not enough data to forecast (need at least 2 months).")
+        st.stop()
 
-    # -----------------------------
-    # Time Series
-    # -----------------------------
-    qty_ts = df_p.set_index("Date")["Sum of TOTQTY"].asfreq('MS')  # Ensure monthly frequency
+    qty_ts = df_p.set_index("Date")["Sum of TOTQTY"].asfreq('MS')
     val_ts = df_p.set_index("Date")["Sum of TOTNET"].asfreq('MS')
 
     # -----------------------------
@@ -66,30 +56,24 @@ if uploaded_file:
     # -----------------------------
     if st.button("Run Prediction"):
 
-        if len(qty_ts) < 2:
-            st.error("Not enough data to forecast.")
-            st.stop()
-
         # ---- Quantity Model
-        qty_model = ExponentialSmoothing(
-            qty_ts,
-            trend="add",
-            seasonal="add",
-            seasonal_periods=12
-        ).fit()
+        if len(qty_ts) < 24:
+            st.warning("Less than 24 months: seasonal component disabled for quantity forecast.")
+            qty_model = ExponentialSmoothing(qty_ts, trend="add", seasonal=None).fit()
+        else:
+            qty_model = ExponentialSmoothing(qty_ts, trend="add", seasonal="add", seasonal_periods=12).fit()
         qty_fc = qty_model.forecast(months)
 
         # ---- Value Model
-        val_model = ExponentialSmoothing(
-            val_ts,
-            trend="add",
-            seasonal="add",
-            seasonal_periods=12
-        ).fit()
+        if len(val_ts) < 24:
+            st.warning("Less than 24 months: seasonal component disabled for value forecast.")
+            val_model = ExponentialSmoothing(val_ts, trend="add", seasonal=None).fit()
+        else:
+            val_model = ExponentialSmoothing(val_ts, trend="add", seasonal="add", seasonal_periods=12).fit()
         val_fc = val_model.forecast(months)
 
         # -----------------------------
-        # Result DataFrame
+        # Forecast Result
         # -----------------------------
         result = pd.DataFrame({
             "Month": qty_fc.index,
@@ -101,12 +85,9 @@ if uploaded_file:
         st.dataframe(result)
 
         # -----------------------------
-        # Line Chart: Actual vs Forecast
+        # Chart: Actual vs Forecast QTY
         # -----------------------------
-        chart_df = pd.concat([
-            qty_ts.rename("Actual QTY"),
-            qty_fc.rename("Forecast QTY")
-        ])
+        chart_df = pd.concat([qty_ts.rename("Actual QTY"), qty_fc.rename("Forecast QTY")])
         st.line_chart(chart_df)
 
         # -----------------------------
