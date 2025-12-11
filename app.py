@@ -17,16 +17,17 @@ from statsmodels.tsa.holtwinters import SimpleExpSmoothing, ExponentialSmoothing
 from statsmodels.tsa.arima.model import ARIMA
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 
-from pmdarima import auto_arima   # ✅ AUTO-SARIMA
-
 warnings.filterwarnings("ignore")
 
+# --------------------------------------------------
+# Streamlit UI
+# --------------------------------------------------
 st.set_page_config("Top-3 Forecast Models (Auto-SARIMA)", layout="wide")
 st.title("📦 Product Forecast — Top 3 Best Models (Auto-SARIMA Enabled)")
 
-# --------------------------
-# Upload data
-# --------------------------
+# --------------------------------------------------
+# File upload
+# --------------------------------------------------
 file = st.file_uploader("Upload Excel / CSV", type=["xlsx", "csv"])
 if not file:
     st.stop()
@@ -42,9 +43,9 @@ df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
 df["Sum of TOTQTY"] = pd.to_numeric(df["Sum of TOTQTY"], errors="coerce")
 df = df.dropna().sort_values("Date")
 
-# --------------------------
-# Sidebar controls
-# --------------------------
+# --------------------------------------------------
+# Sidebar
+# --------------------------------------------------
 products = st.sidebar.multiselect(
     "Select Product(s)",
     sorted(df["ITEM CODE"].astype(str).unique())
@@ -56,9 +57,9 @@ backtest_months = st.sidebar.slider("Backtest months", 3, 6, 3)
 if not products:
     st.stop()
 
-# --------------------------
+# --------------------------------------------------
 # Helper functions
-# --------------------------
+# --------------------------------------------------
 def safe_mape(y_true, y_pred):
     y_true, y_pred = np.array(y_true), np.array(y_pred)
     mask = y_true != 0
@@ -70,14 +71,55 @@ def enforce_non_negative(preds, last_value):
         preds[:] = 0
     return preds
 
-# --------------------------
-# Final results container
-# --------------------------
+# --------------------------------------------------
+# Manual Auto-SARIMA (grid search)
+# --------------------------------------------------
+from itertools import product
+
+def manual_auto_sarima(train):
+    p = d = q = range(0, 2)
+    P = D = Q = range(0, 2)
+    m = 12  # Monthly seasonality
+
+    best_aic = float("inf")
+    best_order = None
+    best_seasonal = None
+
+    for order in product(p, d, q):
+        for seas in product(P, D, Q):
+            seasonal_order = (seas[0], seas[1], seas[2], m)
+            try:
+                model = SARIMAX(
+                    train,
+                    order=order,
+                    seasonal_order=seasonal_order,
+                    enforce_stationarity=False,
+                    enforce_invertibility=False
+                ).fit(disp=False)
+
+                if model.aic < best_aic:
+                    best_aic = model.aic
+                    best_order = order
+                    best_seasonal = seasonal_order
+            except:
+                continue
+
+    final_model = SARIMAX(
+        train,
+        order=best_order,
+        seasonal_order=best_seasonal,
+        enforce_stationarity=False,
+        enforce_invertibility=False
+    ).fit(disp=False)
+
+    return final_model
+
+
+# --------------------------------------------------
+# Forecasting for each product
+# --------------------------------------------------
 final_results = []
 
-# ==========================
-# Forecast per product
-# ==========================
 for product in products:
 
     df_p = df[df["ITEM CODE"].astype(str) == str(product)]
@@ -91,7 +133,7 @@ for product in products:
     if len(ts) < 6:
         continue
 
-    # ✅ Rule: last 6 months zero or negative
+    # Zero-rule: last 6 months no sales
     if (ts[-6:] <= 0).all():
         for m in range(1, forecast_months + 1):
             final_results.append({
@@ -108,7 +150,7 @@ for product in products:
 
     model_errors = {}
 
-    # ---------------- Linear Regression
+    # -------- Linear Regression
     try:
         X = np.arange(len(train)).reshape(-1, 1)
         lr = LinearRegression().fit(X, train.values)
@@ -117,7 +159,7 @@ for product in products:
     except:
         pass
 
-    # ---------------- SES
+    # -------- SES
     try:
         m = SimpleExpSmoothing(train).fit()
         preds = m.forecast(len(test))
@@ -125,7 +167,7 @@ for product in products:
     except:
         pass
 
-    # ---------------- Holt
+    # -------- Holt
     try:
         m = ExponentialSmoothing(train, trend="add").fit()
         preds = m.forecast(len(test))
@@ -133,7 +175,7 @@ for product in products:
     except:
         pass
 
-    # ---------------- ARIMA
+    # -------- ARIMA
     try:
         m = ARIMA(train, order=(1,1,1)).fit()
         preds = m.forecast(len(test))
@@ -141,34 +183,26 @@ for product in products:
     except:
         pass
 
-    # ---------------- Auto-SARIMA ✅
+    # -------- Manual Auto-SARIMA (best alternative to pmdarima)
     try:
-        auto_model = auto_arima(
-            train,
-            seasonal=True,
-            m=12,
-            stepwise=True,
-            suppress_warnings=True,
-            error_action="ignore"
-        )
-        preds = auto_model.predict(n_periods=len(test))
+        best_model = manual_auto_sarima(train)
+        preds = best_model.forecast(len(test))
         model_errors["Auto-SARIMA"] = safe_mape(test, preds)
     except:
         pass
 
+
     if not model_errors:
         continue
 
-    # ---------------- Select TOP-3 best models
+    # Select TOP-3 models
     best_models = sorted(model_errors.items(), key=lambda x: x[1])[:3]
 
-    # ---------------- Final Forecast
+    # Final forecast for selected models
     for model_name, mape in best_models:
         try:
             if model_name == "Linear":
-                preds = lr.predict(
-                    np.arange(len(ts), len(ts)+forecast_months).reshape(-1,1)
-                )
+                preds = lr.predict(np.arange(len(ts), len(ts)+forecast_months).reshape(-1,1))
 
             elif model_name == "SES":
                 preds = SimpleExpSmoothing(ts).fit().forecast(forecast_months)
@@ -180,10 +214,8 @@ for product in products:
                 preds = ARIMA(ts, order=(1,1,1)).fit().forecast(forecast_months)
 
             elif model_name == "Auto-SARIMA":
-                preds = auto_arima(
-                    ts, seasonal=True, m=12,
-                    stepwise=True, suppress_warnings=True
-                ).predict(n_periods=forecast_months)
+                final_model = manual_auto_sarima(ts)
+                preds = final_model.forecast(forecast_months)
 
             preds = enforce_non_negative(np.array(preds), ts.iloc[-1])
 
@@ -195,12 +227,14 @@ for product in products:
                     "Forecast Value": round(float(val),2),
                     "MAPE %": round(mape,2)
                 })
+
         except:
             continue
 
-# ==========================
-# Output
-# ==========================
+
+# --------------------------------------------------
+# Output table
+# --------------------------------------------------
 final_df = pd.DataFrame(final_results)
 
 st.subheader("✅ Top-3 Best Model Forecasts (Including Auto-SARIMA)")
@@ -212,6 +246,7 @@ st.download_button(
     "auto_sarima_forecast.csv",
     mime="text/csv"
 )
+
 
 
 
