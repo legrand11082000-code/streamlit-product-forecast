@@ -19,7 +19,7 @@ warnings.filterwarnings("ignore")
 # Streamlit UI
 # ---------------------------
 st.set_page_config(page_title="Top-3 Forecast Models (Auto-SARIMA)", layout="wide")
-st.title("📦 Product Forecast — Top 3 Best Models (Auto-SARIMA Enabled)")
+st.title("📦 Product Forecast — Top 3 Best Models")
 
 # ---------------------------
 # File Upload
