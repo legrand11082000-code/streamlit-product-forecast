@@ -1,10 +1,8 @@
-streamlit==1.52.1
+streamlit
 pandas
-numpy
+numpy==1.26.4
+scipy==1.10.1
+pmdarima==1.8.5
 scikit-learn
-xgboost
-prophet
-tensorflow
 statsmodels
 openpyxl
-pmdarima==2.0.4
