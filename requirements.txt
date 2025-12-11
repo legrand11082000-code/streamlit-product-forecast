@@ -7,4 +7,4 @@ prophet
 tensorflow
 statsmodels
 openpyxl
-pmdarima
+pmdarima==2.0.4
