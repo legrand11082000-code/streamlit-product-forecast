@@ -11,19 +11,18 @@ from sklearn.metrics import r2_score
 from statsmodels.tsa.holtwinters import SimpleExpSmoothing, ExponentialSmoothing
 from statsmodels.tsa.arima.model import ARIMA
 from statsmodels.tsa.statespace.sarimax import SARIMAX
-from statsmodels.tsa.seasonal import seasonal_decompose
 
 warnings.filterwarnings("ignore")
 
-# -------------------------------------------------
+# ======================================================
 # Streamlit UI
-# -------------------------------------------------
-st.set_page_config(page_title="Product Forecast — Top-3 Models (R²)", layout="wide")
+# ======================================================
+st.set_page_config(page_title="Product Forecast (R² + Auto-SARIMA)", layout="wide")
 st.title("📦 Product Forecast — Top-3 Models (R² based)")
 
-# -------------------------------------------------
+# ======================================================
 # Upload
-# -------------------------------------------------
+# ======================================================
 file = st.file_uploader("Upload Excel / CSV", type=["xlsx", "csv"])
 if not file:
     st.info("Upload file with columns: Date, ITEM CODE, Sum of TOTQTY")
@@ -36,42 +35,42 @@ if not required.issubset(df.columns):
     st.error("Missing required columns")
     st.stop()
 
-df["Date"] = pd.to_datetime(df["Date"])
-df["Sum of TOTQTY"] = pd.to_numeric(df["Sum of TOTQTY"])
+df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+df["Sum of TOTQTY"] = pd.to_numeric(df["Sum of TOTQTY"], errors="coerce")
 df = df.dropna().sort_values("Date")
 
-# -------------------------------------------------
-# Sidebar selection
-# -------------------------------------------------
+# ======================================================
+# Sidebar
+# ======================================================
 products_all = sorted(df["ITEM CODE"].astype(str).unique())
 products_selected = st.sidebar.multiselect(
     "Select Product(s) for UI",
     products_all
 )
 
-# -------------------------------------------------
+# ======================================================
 # Fixed horizon
-# -------------------------------------------------
+# ======================================================
 FORECAST_MONTHS = 1
 BACKTEST_MONTHS = 3
 
-# -------------------------------------------------
+# ======================================================
 # Utilities
-# -------------------------------------------------
+# ======================================================
 def safe_r2(y_true, y_pred):
     if len(y_true) < 2 or np.all(y_true == y_true[0]):
         return -np.inf
     return r2_score(y_true, y_pred)
 
-def enforce_non_negative(preds):
-    return np.maximum(np.array(preds), 0)
+def enforce_non_negative(x):
+    return max(float(x), 0.0)
 
 def check_zero_last_6(ts):
     return len(ts) >= 6 and (ts[-6:] <= 0).all()
 
-# -------------------------------------------------
-# Models
-# -------------------------------------------------
+# ======================================================
+# Forecast Models
+# ======================================================
 def model_linear(train, h):
     X = np.arange(len(train)).reshape(-1, 1)
     lr = LinearRegression().fit(X, train.values)
@@ -95,25 +94,52 @@ def model_drift(train, h):
     return np.array([train.iloc[-1] + slope * (i + 1) for i in range(h)])
 
 def model_seasonal_naive(train, h):
-    return np.array([train.iloc[-12 + i] if len(train) >= 12 else train.iloc[-1] for i in range(h)])
+    if len(train) >= 12:
+        return np.array([train.iloc[-12 + i] for i in range(h)])
+    return np.repeat(train.iloc[-1], h)
 
-def auto_sarima(train):
+# ======================================================
+# OPTIMIZED AUTO-SARIMA (FAST & SAFE)
+# ======================================================
+def auto_sarima_optimized(train):
+    """
+    Optimized Auto-SARIMA:
+    - Small grid
+    - Seasonal only if enough data
+    - AIC-based selection
+    """
     best_aic = np.inf
     best_model = None
-    for order in product(range(2), range(2), range(2)):
-        try:
-            m = SARIMAX(train, order=order, seasonal_order=(0,0,0,12)).fit(disp=False)
-            if m.aic < best_aic:
-                best_aic = m.aic
-                best_model = m
-        except:
-            pass
+
+    p = d = q = [0, 1]
+    seasonal_orders = [(0,0,0,0)]
+
+    if len(train) >= 24:
+        seasonal_orders = [(0,0,0,12), (1,0,0,12), (0,1,0,12)]
+
+    for order in product(p, d, q):
+        for seas in seasonal_orders:
+            try:
+                model = SARIMAX(
+                    train,
+                    order=order,
+                    seasonal_order=seas,
+                    enforce_stationarity=False,
+                    enforce_invertibility=False
+                ).fit(disp=False)
+
+                if model.aic < best_aic:
+                    best_aic = model.aic
+                    best_model = model
+            except:
+                continue
+
     return best_model
 
-# -------------------------------------------------
+# ======================================================
 # Forecast Loop
-# -------------------------------------------------
-final_rows =sults = []
+# ======================================================
+final_rows = []
 chosen_rows = []
 
 progress = st.progress(0)
@@ -136,7 +162,7 @@ for i, product in enumerate(products_all):
         chosen_rows.append({
             "Product": product,
             "Chosen Model": "Zero-Rule",
-            "Forecast": 0,
+            "Forecast": 0.0,
             "R2": None
         })
         continue
@@ -148,11 +174,11 @@ for i, product in enumerate(products_all):
         "Linear": model_linear,
         "SES": model_ses,
         "Holt": model_holt,
-        "ARIMA": model_arima,
+        "ARIMA(1,1,1)": model_arima,
         "SMA": model_sma,
         "Drift": model_drift,
         "Seasonal-Naive": model_seasonal_naive,
-        "Auto-SARIMA": lambda t, h: auto_sarima(t).forecast(h)
+        "Auto-SARIMA": lambda t, h: auto_sarima_optimized(t).forecast(h)
     }
 
     scores = {}
@@ -163,9 +189,9 @@ for i, product in enumerate(products_all):
             preds_bt = fn(train, BACKTEST_MONTHS)
             r2 = safe_r2(test, preds_bt)
             scores[name] = r2
-            forecasts[name] = enforce_non_negative(fn(ts, FORECAST_MONTHS))[0]
+            forecasts[name] = enforce_non_negative(fn(ts, FORECAST_MONTHS)[0])
         except:
-            pass
+            continue
 
     if not scores:
         continue
@@ -173,11 +199,11 @@ for i, product in enumerate(products_all):
     top3 = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:3]
 
     for m, r2 in top3:
-        final_rowsults.append({
+        final_rows.append({
             "Product": product,
             "Model": m,
             "Forecast": round(forecasts[m], 2),
-            "R2": round(r2, 2),
+            "R2": round(r2, 3),
             "Chosen": False
         })
 
@@ -187,23 +213,23 @@ for i, product in enumerate(products_all):
         "Product": product,
         "Chosen Model": chosen_model,
         "Forecast": round(forecasts[chosen_model], 2),
-        "R2": round(scores[chosen_model], 2)
+        "R2": round(scores[chosen_model], 3)
     })
 
-# -------------------------------------------------
+# ======================================================
 # DataFrames
-# -------------------------------------------------
-final_df = pd.DataFrame(final_rowsults)
+# ======================================================
+final_df = pd.DataFrame(final_rows)
 chosen_df = pd.DataFrame(chosen_rows)
 
-# -------------------------------------------------
-# UI display
-# -------------------------------------------------
 if products_selected:
     final_df = final_df[final_df["Product"].isin(products_selected)]
     chosen_df = chosen_df[chosen_df["Product"].isin(products_selected)]
 
-st.subheader("✅ Chosen Forecasts (R² based)")
+# ======================================================
+# UI
+# ======================================================
+st.subheader("✅ Chosen Forecast (Best R²)")
 st.dataframe(chosen_df, use_container_width=True)
 
 st.subheader("ℹ️ Top-3 Models by R²")
@@ -211,12 +237,13 @@ st.dataframe(final_df, use_container_width=True)
 
 st.download_button(
     "Download Top-3 Forecasts (Non-Zero)",
-    final_df[final_df["Forecast"] > 0].to_csv(index=False).encode(),
+    final_df[final_df["Forecast"] > 0].to_csv(index=False).encode("utf-8"),
     "top3_forecasts.csv",
     mime="text/csv"
 )
 
-st.success("Forecast completed successfully 🎯")
+st.success("Forecast completed successfully 🚀")
+
 
 
 
