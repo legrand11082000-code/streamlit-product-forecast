@@ -204,12 +204,6 @@ out_df = pd.DataFrame(final_rows)
 st.subheader("🏆 Top-3 Models per Product")
 st.dataframe(out_df, use_container_width=True)
 
-st.download_button(
-    "Download Forecast CSV",
-    out_df.to_csv(index=False).encode("utf-8"),
-    "seasonality_forecast_top3.csv",
-    mime="text/csv"
-)
 
 st.success("Forecast completed successfully 🚀")
 
