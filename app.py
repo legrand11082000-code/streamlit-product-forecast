@@ -1,5 +1,5 @@
 # =========================================================
-# app.py — Seasonality Driven Forecast Engine (R² Based)
+# app.py — FAST Seasonality Forecast Engine (R² Based)
 # =========================================================
 
 import streamlit as st
@@ -22,7 +22,7 @@ warnings.filterwarnings("ignore")
 # UI
 # =========================================================
 st.set_page_config(page_title="Seasonality Forecast Engine", layout="wide")
-st.title("📊 Seasonality-Based Forecasting (Top-3 Models by R²)")
+st.title("📊 Fast Seasonality-Based Forecasting (Top-3 by R²)")
 
 # =========================================================
 # Upload
@@ -48,10 +48,10 @@ df = df.dropna().sort_values("Date")
 FORECAST_HORIZON = 1
 BACKTEST_MONTHS = 3
 SEASONAL_PERIOD = 12
-Z = 1.96  # 95% CI
+Z = 1.96
 
 # =========================================================
-# Helpers
+# Helper Functions
 # =========================================================
 def detect_seasonality(ts, m=12):
     if len(ts) < 2 * m:
@@ -75,137 +75,133 @@ def build_features(ts):
     df["month"] = df.index.month
     return df.dropna()
 
-def tight_ci(forecast, residuals):
+def tight_ci(fc, residuals):
     sigma = np.std(residuals)
-    lower = max(forecast - Z * sigma, 0)
-    upper = max(forecast + Z * sigma, 0)
-    return lower, upper
+    return max(fc - Z * sigma, 0), max(fc + Z * sigma, 0)
 
 # =========================================================
-# Forecast loop
+# 🚀 Cached Forecast Engine (MAIN SPEED FIX)
 # =========================================================
-final_rows = []
+@st.cache_data(show_spinner=True)
+def run_forecast(df):
 
-for product in df["ITEM CODE"].astype(str).unique():
+    final_rows = []
+    products = df["ITEM CODE"].astype(str).unique()
+    total = len(products)
 
-    ts = (
-        df[df["ITEM CODE"].astype(str) == product]
-        .groupby("Date")["Sum of TOTQTY"]
-        .sum()
-        .asfreq("MS")
-        .fillna(0)
-    )
+    for i, product in enumerate(products):
 
-    if len(ts) < 24:
-        continue
+        ts = (
+            df[df["ITEM CODE"].astype(str) == product]
+            .groupby("Date")["Sum of TOTQTY"]
+            .sum()
+            .asfreq("MS")
+            .fillna(0)
+        )
 
-    seasonality = detect_seasonality(ts)
-    train = ts[:-BACKTEST_MONTHS]
-    test = ts[-BACKTEST_MONTHS:]
+        if len(ts) < 24:
+            continue
 
-    scores = {}
-    forecasts = {}
-    residuals = {}
+        seasonality = detect_seasonality(ts)
+        train = ts[:-BACKTEST_MONTHS]
+        test = ts[-BACKTEST_MONTHS:]
 
-    # =====================================================
-    # Linear Regression
-    # =====================================================
-    X = np.arange(len(train)).reshape(-1, 1)
-    lr = LinearRegression().fit(X, train.values)
-    preds_bt = lr.predict(np.arange(len(train), len(train) + BACKTEST_MONTHS).reshape(-1, 1))
-    scores["Linear"] = safe_r2(test.values, preds_bt)
-    forecasts["Linear"] = lr.predict([[len(ts)]])[0]
-    residuals["Linear"] = train.values - lr.predict(X)
+        scores, forecasts, residuals = {}, {}, {}
 
-    # =====================================================
-    # SES
-    # =====================================================
-    ses = SimpleExpSmoothing(train).fit()
-    scores["SES"] = safe_r2(test.values, ses.forecast(BACKTEST_MONTHS))
-    forecasts["SES"] = ses.forecast(1)[0]
-    residuals["SES"] = train.values - ses.fittedvalues
+        # ------------------ Linear ------------------
+        X = np.arange(len(train)).reshape(-1, 1)
+        lr = LinearRegression().fit(X, train.values)
+        preds = lr.predict(np.arange(len(train), len(train) + BACKTEST_MONTHS).reshape(-1, 1))
+        scores["Linear"] = safe_r2(test.values, preds)
+        forecasts["Linear"] = lr.predict([[len(ts)]])[0]
+        residuals["Linear"] = train.values - lr.predict(X)
 
-    # =====================================================
-    # Seasonal Models
-    # =====================================================
-    if seasonality != "Non-Seasonal":
-        hw = ExponentialSmoothing(
-            train,
-            trend="add",
-            seasonal="add",
-            seasonal_periods=SEASONAL_PERIOD
-        ).fit()
+        # ------------------ SES ------------------
+        ses = SimpleExpSmoothing(train).fit()
+        scores["SES"] = safe_r2(test.values, ses.forecast(BACKTEST_MONTHS))
+        forecasts["SES"] = ses.forecast(1)[0]
+        residuals["SES"] = train.values - ses.fittedvalues
 
-        scores["Holt-Winters"] = safe_r2(test.values, hw.forecast(BACKTEST_MONTHS))
-        forecasts["Holt-Winters"] = hw.forecast(1)[0]
-        residuals["Holt-Winters"] = train.values - hw.fittedvalues
+        # ------------------ Seasonal models (ONLY strong seasonal) ------------------
+        if seasonality == "Seasonal":
 
-        sarima = SARIMAX(
-            train,
-            order=(1,1,1),
-            seasonal_order=(1,1,1,SEASONAL_PERIOD),
-            enforce_stationarity=False,
-            enforce_invertibility=False
-        ).fit(disp=False)
+            hw = ExponentialSmoothing(
+                train, trend="add", seasonal="add",
+                seasonal_periods=SEASONAL_PERIOD
+            ).fit()
 
-        scores["SARIMA"] = safe_r2(test.values, sarima.forecast(BACKTEST_MONTHS))
-        forecasts["SARIMA"] = sarima.forecast(1)[0]
-        residuals["SARIMA"] = sarima.resid
+            scores["Holt-Winters"] = safe_r2(test.values, hw.forecast(BACKTEST_MONTHS))
+            forecasts["Holt-Winters"] = hw.forecast(1)[0]
+            residuals["Holt-Winters"] = train.values - hw.fittedvalues
 
-    # =====================================================
-    # ML Models
-    # =====================================================
-    feat = build_features(train)
-    Xf = feat.drop(columns="y").fillna(0)
-    yf = feat["y"]
+            sarima = SARIMAX(
+                train,
+                order=(1,1,1),
+                seasonal_order=(1,1,1,SEASONAL_PERIOD),
+                enforce_stationarity=False,
+                enforce_invertibility=False
+            ).fit(disp=False)
 
-    for name, model in {
-        "RandomForest": RandomForestRegressor(n_estimators=300, random_state=42),
-        "DecisionTree": DecisionTreeRegressor(max_depth=5, random_state=42)
-    }.items():
+            scores["SARIMA"] = safe_r2(test.values, sarima.forecast(BACKTEST_MONTHS))
+            forecasts["SARIMA"] = sarima.forecast(1)[0]
+            residuals["SARIMA"] = sarima.resid
 
-        model.fit(Xf, yf)
+        # ------------------ ML models (skip short series) ------------------
+        if len(train) >= 18:
 
-        test_feat = build_features(ts[:-1]).iloc[-BACKTEST_MONTHS:]
-        X_test = test_feat.drop(columns="y").fillna(0)
+            feat = build_features(train)
+            Xf = feat.drop(columns="y").fillna(0)
+            yf = feat["y"]
 
-        preds_bt = model.predict(X_test)
-        scores[name] = safe_r2(test.values, preds_bt)
+            for name, model in {
+                "RandomForest": RandomForestRegressor(
+                    n_estimators=120, max_depth=8, n_jobs=-1, random_state=42
+                ),
+                "DecisionTree": DecisionTreeRegressor(max_depth=5, random_state=42)
+            }.items():
 
-        last_feat = build_features(ts).iloc[[-1]].drop(columns="y").fillna(0)
-        forecasts[name] = model.predict(last_feat)[0]
+                model.fit(Xf, yf)
 
-        residuals[name] = yf - model.predict(Xf)
+                test_feat = build_features(ts[:-1]).iloc[-BACKTEST_MONTHS:]
+                X_test = test_feat.drop(columns="y").fillna(0)
 
-    # =====================================================
-    # Top-3 selection
-    # =====================================================
-    top3 = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:3]
+                preds = model.predict(X_test)
+                scores[name] = safe_r2(test.values, preds)
 
-    for model_name, r2 in top3:
-        fc = max(forecasts[model_name], 0)
-        lo, hi = tight_ci(fc, residuals[model_name])
+                last_feat = build_features(ts).iloc[[-1]].drop(columns="y").fillna(0)
+                forecasts[name] = model.predict(last_feat)[0]
+                residuals[name] = yf - model.predict(Xf)
 
-        final_rows.append({
-            "Product": product,
-            "Seasonality": seasonality,
-            "Model": model_name,
-            "Forecast": round(fc, 2),
-            "Lower CI": round(lo, 2),
-            "Upper CI": round(hi, 2),
-            "R2": round(r2, 3)
-        })
+        # ------------------ Top-3 selection ------------------
+        top3 = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:3]
+
+        for model_name, r2 in top3:
+            fc = max(forecasts[model_name], 0)
+            lo, hi = tight_ci(fc, residuals[model_name])
+
+            final_rows.append({
+                "Product": product,
+                "Seasonality": seasonality,
+                "Model": model_name,
+                "Forecast": round(fc, 2),
+                "Lower CI": round(lo, 2),
+                "Upper CI": round(hi, 2),
+                "R2": round(r2, 3)
+            })
+
+    return pd.DataFrame(final_rows)
 
 # =========================================================
-# Output
+# Run
 # =========================================================
-out_df = pd.DataFrame(final_rows)
+with st.spinner("Running optimized forecast engine..."):
+    output_df = run_forecast(df)
 
 st.subheader("🏆 Top-3 Models per Product")
-st.dataframe(out_df, use_container_width=True)
+st.dataframe(output_df, use_container_width=True)
 
 
-st.success("Forecast completed successfully 🚀")
+st.success("Forecast completed — optimized & cached 🚀")
 
 
 
